@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 98%;
+    --foreground: 215 25% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 15%;
+    --primary: 211 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 215 25% 15%;
+    --muted: 210 30% 95%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 211 100% 96%;
+    --accent-foreground: 211 100% 30%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 25% 90%;
+    --input: 214 25% 90%;
+    --ring: 211 100% 50%;
+    --radius: 0.625rem;
+
+    --course-blue: 211 100% 55%;
+    --course-yellow: 42 100% 55%;
+    --course-red: 358 80% 58%;
+    --course-purple: 268 65% 60%;
+    --course-green: 152 60% 45%;
+    --course-orange: 24 95% 58%;
+    --course-teal: 178 70% 42%;
+
+    --sidebar-background: 215 60% 28%;
+    --sidebar-foreground: 210 30% 92%;
+    --sidebar-primary: 211 100% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 55% 22%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 215 50% 20%;
+    --sidebar-ring: 211 100% 60%;
+
+    --gradient-sidebar: linear-gradient(180deg, hsl(215 65% 30%) 0%, hsl(215 60% 22%) 100%);
+    --gradient-header: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(210 30% 97%) 100%);
+    --shadow-card: 0 1px 3px 0 hsl(215 25% 15% / 0.05), 0 1px 2px -1px hsl(215 25% 15% / 0.05);
+    --shadow-card-hover: 0 8px 24px -8px hsl(215 25% 15% / 0.12);
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground font-sans; }
+}
