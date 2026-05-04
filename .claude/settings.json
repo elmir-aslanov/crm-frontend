@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/YOGA/Desktop/crm-server/**)",
+      "Read(//c/Users/YOGA/Desktop/crm-server/src/**)"
+    ]
+  }
+}

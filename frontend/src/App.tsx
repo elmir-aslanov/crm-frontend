@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -10,6 +10,7 @@ import LoginPage from "./pages/LoginPage";
 import Index from "./pages/Index";
 import {
   AttendancePage,
+  CategoriesPage,
   ClassesPage,
   CoursesPage,
   CrmPage,
@@ -34,9 +35,10 @@ const App = () => (
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/" element={<Navigate to="/login" replace />} />
 
           <Route
-            path="/"
+            path="/dashboard"
             element={
               <ProtectedRoute>
                 <Index />
@@ -104,6 +106,14 @@ const App = () => (
             element={
               <ProtectedRoute>
                 <CoursesPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/kateqoriyalar"
+            element={
+              <ProtectedRoute>
+                <CategoriesPage />
               </ProtectedRoute>
             }
           />

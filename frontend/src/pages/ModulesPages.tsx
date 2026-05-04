@@ -6,10 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { toast } from "@/hooks/use-toast";
+import { Modal } from "@/components/Modal";
 import {
-  AttendanceStatus,
-  LeadStatus,
-  useAttendanceByGroup,
   useBulkMarkAttendance,
   useCourses,
   useCreateCourse,
@@ -28,7 +26,11 @@ import {
   useUpdatePaymentStatus,
   useUpdateSettings,
   useUsers,
+  useCategories,
 } from "@/api/resources";
+
+type LeadStatus = "New" | "Contacted" | "Interested" | "Trial" | "Enrolled" | "Lost";
+type AttendanceStatus = "Present" | "Absent" | "Late" | "Excused";
 
 function PageShell({ children }: { children: React.ReactNode }) {
   return (
@@ -61,9 +63,11 @@ export function UsersPage() {
             İstifadəçilər alınmadı: {(users.error as Error)?.message ?? "Xəta"}
           </p>
         )}
+
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {users.data?.map((user) => {
             const initials = `${user.firstName?.[0] ?? ""}${user.lastName?.[0] ?? ""}`.toUpperCase();
+
             return (
               <article key={user._id} className="rounded-xl border border-border bg-background p-4 shadow-sm">
                 <div className="flex items-center gap-3 border-b border-border pb-4">
@@ -77,6 +81,7 @@ export function UsersPage() {
                     <p className="text-xs text-muted-foreground">{user.role ?? "user"}</p>
                   </div>
                 </div>
+
                 <dl className="mt-4 space-y-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-muted-foreground">Email</dt>
@@ -88,7 +93,13 @@ export function UsersPage() {
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-muted-foreground">Status</dt>
-                    <dd className={`rounded-full px-2 py-0.5 text-xs font-semibold ${user.isActive === false ? "bg-destructive/10 text-destructive" : "bg-green-500/10 text-green-600"}`}>
+                    <dd
+                      className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                        user.isActive === false
+                          ? "bg-destructive/10 text-destructive"
+                          : "bg-green-500/10 text-green-600"
+                      }`}
+                    >
                       {user.isActive === false ? "Deaktiv" : "Aktiv"}
                     </dd>
                   </div>
@@ -102,7 +113,7 @@ export function UsersPage() {
   );
 }
 
-// ---- CRM (LEADS KANBAN) ----
+// ---- CRM ----
 
 const LEAD_STATUSES: { key: LeadStatus; label: string }[] = [
   { key: "New", label: "Yeni" },
@@ -128,85 +139,209 @@ export function CrmPage() {
   const [newFirst, setNewFirst] = React.useState("");
   const [newLast, setNewLast] = React.useState("");
   const [newPhone, setNewPhone] = React.useState("");
+  const [newEmail, setNewEmail] = React.useState("");
+  const [newSource, setNewSource] = React.useState("Phone");
+  const [newCourseId, setNewCourseId] = React.useState("");
+  const [newAssignedId, setNewAssignedId] = React.useState("");
+  const [newUtmSource, setNewUtmSource] = React.useState("");
 
   const leadsQ = useLeads();
+  const coursesQ = useCourses();
+  const usersQ = useUsers();
   const createLead = useCreateLead();
   const updateStatus = useUpdateLeadStatus();
 
   const leads = leadsQ.data?.items ?? [];
+
   const filtered = search
     ? leads.filter((l) =>
         `${l.firstName} ${l.lastName}`.toLowerCase().includes(search.toLowerCase())
       )
     : leads;
 
-  const byStatus = LEAD_STATUSES.reduce<Record<string, typeof filtered>>(
-    (acc, s) => { acc[s.key] = filtered.filter((l) => l.status === s.key); return acc; },
-    {}
-  );
+  const byStatus = LEAD_STATUSES.reduce<Record<string, typeof filtered>>((acc, s) => {
+    acc[s.key] = filtered.filter((l) => l.status === s.key);
+    return acc;
+  }, {});
 
   return (
     <PageShell>
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="relative w-full max-w-md">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input className="pl-9" placeholder="Axtar..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <Input
+            className="pl-9"
+            placeholder="Axtar..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
+
         <Button size="sm" onClick={() => setShowCreate((v) => !v)}>
           <Plus className="mr-1 h-4 w-4" /> Yeni lead
         </Button>
       </div>
 
       {showCreate && (
-        <div className="mb-4 flex flex-wrap gap-2 rounded-xl border border-border bg-card p-4">
-          <Input className="w-32" placeholder="Ad" value={newFirst} onChange={(e) => setNewFirst(e.target.value)} />
-          <Input className="w-32" placeholder="Soyad" value={newLast} onChange={(e) => setNewLast(e.target.value)} />
-          <Input className="w-40" placeholder="Telefon" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
-          <Button size="sm" disabled={createLead.isPending}
-            onClick={async () => {
-              try {
-                if (!newFirst.trim() || !newLast.trim() || !newPhone.trim()) {
-                  toast({ title: "Xəta", description: "Ad, soyad və telefon tələb olunur.", variant: "destructive" });
-                  return;
-                }
-                await createLead.mutateAsync({ firstName: newFirst.trim(), lastName: newLast.trim(), phone: newPhone.trim(), status: "New", source: "Phone" });
-                setNewFirst(""); setNewLast(""); setNewPhone("");
-                setShowCreate(false);
-                toast({ title: "Uğurlu", description: "Lead əlavə edildi." });
-              } catch (e: unknown) {
-                toast({ title: "Xəta", description: (e as Error)?.message ?? "Xəta baş verdi.", variant: "destructive" });
-              }
-            }}
-          >
-            Əlavə et
-          </Button>
-        </div>
+        <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Yeni Lead Əlavə et">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input placeholder="Ad" value={newFirst} onChange={(e) => setNewFirst(e.target.value)} />
+            <Input placeholder="Soyad" value={newLast} onChange={(e) => setNewLast(e.target.value)} />
+            <Input placeholder="Telefon" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
+            <Input
+              type="email"
+              placeholder="Email"
+              value={newEmail}
+              onChange={(e) => setNewEmail(e.target.value)}
+            />
+
+            <select
+              className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              value={newSource}
+              onChange={(e) => setNewSource(e.target.value)}
+            >
+              <option value="Website">Website</option>
+              <option value="Phone">Telefon</option>
+              <option value="Facebook">Facebook</option>
+              <option value="Instagram">Instagram</option>
+              <option value="Referral">Referral</option>
+              <option value="Walk-in">Walk-in</option>
+            </select>
+
+            <select
+              className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              value={newCourseId}
+              onChange={(e) => setNewCourseId(e.target.value)}
+            >
+              <option value="">Kurs seçin</option>
+              {(coursesQ.data?.items ?? []).map((course) => (
+                <option key={course.id ?? course._id} value={course.id ?? course._id}>
+                  {course.name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              value={newAssignedId}
+              onChange={(e) => setNewAssignedId(e.target.value)}
+            >
+              <option value="">Təyin edin</option>
+              {usersQ.data?.map((user) => (
+                <option key={user._id} value={user._id}>
+                  {user.firstName} {user.lastName}
+                </option>
+              ))}
+            </select>
+
+            <Input
+              placeholder="UTM Source"
+              value={newUtmSource}
+              onChange={(e) => setNewUtmSource(e.target.value)}
+            />
+
+            <div className="flex gap-2 sm:col-span-2">
+              <Button
+                size="sm"
+                disabled={createLead.isPending}
+                onClick={async () => {
+                  try {
+                    if (!newFirst.trim() || !newLast.trim() || !newPhone.trim()) {
+                      toast({
+                        title: "Xəta",
+                        description: "Ad, soyad və telefon tələb olunur.",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+
+                    await createLead.mutateAsync({
+                      firstName: newFirst.trim(),
+                      lastName: newLast.trim(),
+                      phone: newPhone.trim(),
+                      email: newEmail.trim() || undefined,
+                      source: newSource,
+                      status: "New",
+                      courseInterest: newCourseId || null,
+                      assignedTo: newAssignedId || null,
+                      utmSource: newUtmSource.trim() || null,
+                    });
+
+                    setNewFirst("");
+                    setNewLast("");
+                    setNewPhone("");
+                    setNewEmail("");
+                    setNewSource("Phone");
+                    setNewCourseId("");
+                    setNewAssignedId("");
+                    setNewUtmSource("");
+                    setShowCreate(false);
+
+                    toast({ title: "Uğurlu", description: "Lead əlavə edildi." });
+                  } catch (e: unknown) {
+                    toast({
+                      title: "Xəta",
+                      description: (e as Error)?.message ?? "Xəta baş verdi.",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+              >
+                Əlavə et
+              </Button>
+
+              <Button size="sm" variant="outline" onClick={() => setShowCreate(false)}>
+                Ləğv et
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {leadsQ.isLoading && <p className="text-sm text-muted-foreground">Yüklənir...</p>}
-      {leadsQ.isError && <p className="text-sm text-destructive">Data alınmadı: {(leadsQ.error as Error)?.message}</p>}
+      {leadsQ.isError && (
+        <p className="text-sm text-destructive">
+          Data alınmadı: {(leadsQ.error as Error)?.message}
+        </p>
+      )}
 
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
         {LEAD_STATUSES.map((s) => (
           <section key={s.key} className="rounded-xl border border-border bg-card p-3 shadow-card">
             <h2 className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <span>{s.label}</span>
-              <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-primary">{byStatus[s.key]?.length ?? 0}</span>
+              <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-primary">
+                {byStatus[s.key]?.length ?? 0}
+              </span>
             </h2>
+
             <div className="space-y-2">
               {byStatus[s.key]?.map((lead) => (
                 <article key={lead.id} className="rounded-lg border border-border bg-background p-3">
-                  <p className="text-sm font-medium">{lead.firstName} {lead.lastName}</p>
+                  <p className="text-sm font-medium">
+                    {lead.firstName} {lead.lastName}
+                  </p>
                   <p className="text-xs text-muted-foreground">{lead.phone}</p>
+
                   {s.key !== "Enrolled" && s.key !== "Lost" && (
-                    <Button variant="ghost" size="sm" className="mt-1 h-6 px-2 text-xs text-primary"
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-1 h-6 px-2 text-xs text-primary"
                       disabled={updateStatus.isPending}
                       onClick={async () => {
                         try {
-                          await updateStatus.mutateAsync({ id: lead.id!, status: NEXT_STATUS[s.key] });
+                          await updateStatus.mutateAsync({
+                            id: lead.id!,
+                            status: NEXT_STATUS[s.key],
+                          });
                           toast({ title: "Status dəyişdi." });
                         } catch (e: unknown) {
-                          toast({ title: "Xəta", description: (e as Error)?.message, variant: "destructive" });
+                          toast({
+                            title: "Xəta",
+                            description: (e as Error)?.message,
+                            variant: "destructive",
+                          });
                         }
                       }}
                     >
@@ -223,7 +358,7 @@ export function CrmPage() {
   );
 }
 
-// ---- GROUPS (ROOMS) ----
+// ---- GROUPS ----
 
 export function RoomsPage() {
   const groups = useGroups();
@@ -232,8 +367,14 @@ export function RoomsPage() {
     <PageShell>
       <section className="rounded-xl border border-border bg-card p-5 shadow-card">
         <h1 className="mb-4 font-display text-2xl font-bold">Qruplar</h1>
+
         {groups.isLoading && <p className="text-sm text-muted-foreground">Yüklənir...</p>}
-        {groups.isError && <p className="text-sm text-destructive">Data alınmadı: {(groups.error as Error)?.message}</p>}
+        {groups.isError && (
+          <p className="text-sm text-destructive">
+            Data alınmadı: {(groups.error as Error)?.message}
+          </p>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
@@ -247,21 +388,30 @@ export function RoomsPage() {
                 <th className="px-3 py-2 text-left">Status</th>
               </tr>
             </thead>
+
             <tbody className="divide-y divide-border">
               {groups.data?.items?.map((g) => (
                 <tr key={g.id}>
                   <td className="px-3 py-2 font-medium">{g.code}</td>
-                  <td className="px-3 py-2">{typeof g.courseId === "object" ? g.courseId?.name : "-"}</td>
+                  <td className="px-3 py-2">
+                    {typeof g.courseId === "object" ? g.courseId?.name : "-"}
+                  </td>
                   <td className="px-3 py-2">
                     {typeof g.teacherId === "object"
                       ? `${g.teacherId?.firstName ?? ""} ${g.teacherId?.lastName ?? ""}`.trim() || "-"
                       : "-"}
                   </td>
-                  <td className="px-3 py-2">{g.startDate ? new Date(g.startDate).toLocaleDateString("az-AZ") : "-"}</td>
-                  <td className="px-3 py-2">{g.endDate ? new Date(g.endDate).toLocaleDateString("az-AZ") : "-"}</td>
+                  <td className="px-3 py-2">
+                    {g.startDate ? new Date(g.startDate).toLocaleDateString("az-AZ") : "-"}
+                  </td>
+                  <td className="px-3 py-2">
+                    {g.endDate ? new Date(g.endDate).toLocaleDateString("az-AZ") : "-"}
+                  </td>
                   <td className="px-3 py-2">{g.room ?? "-"}</td>
                   <td className="px-3 py-2">
-                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">{g.status ?? "-"}</span>
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                      {g.status ?? "-"}
+                    </span>
                   </td>
                 </tr>
               ))}
@@ -277,6 +427,7 @@ export function RoomsPage() {
 
 export function ClassesPage() {
   const students = ["Nigar", "Emil", "Tural", "Teymur", "Aysan", "Davud"];
+
   return (
     <PageShell>
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
@@ -290,14 +441,18 @@ export function ClassesPage() {
             <Input placeholder="Bitmə tarixi" />
           </div>
         </section>
+
         <section className="rounded-xl border border-border bg-card p-5 shadow-card">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="font-display text-lg font-bold">Tələbələr</h2>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm">Qrupu bitir</Button>
+              <Button variant="outline" size="sm">
+                Qrupu bitir
+              </Button>
               <Button size="sm">Şagirdlər</Button>
             </div>
           </div>
+
           <table className="w-full text-sm">
             <thead className="border-b border-border text-xs uppercase text-muted-foreground">
               <tr>
@@ -306,6 +461,7 @@ export function ClassesPage() {
                 <th className="px-3 py-2 text-left">Status</th>
               </tr>
             </thead>
+
             <tbody className="divide-y divide-border">
               {students.map((name) => (
                 <tr key={name}>
@@ -326,6 +482,7 @@ export function ClassesPage() {
 
 export function SchedulePage() {
   const days = ["13 B.e", "14 Ç.a", "15 Ç", "16 C.a", "17 C", "18 Ş", "19 B."];
+
   return (
     <PageShell>
       <section className="rounded-xl border border-border bg-card p-5 shadow-card">
@@ -333,6 +490,7 @@ export function SchedulePage() {
           <h1 className="font-display text-2xl font-bold">Sinif Agendası</h1>
           <Button size="sm">Yeni qrup</Button>
         </div>
+
         <div className="mb-5 flex items-center justify-center gap-3 text-sm font-semibold">
           <button className="rounded-full border border-border p-1">◀</button>
           <div className="inline-flex items-center gap-2">
@@ -341,12 +499,15 @@ export function SchedulePage() {
           </div>
           <button className="rounded-full border border-border p-1">▶</button>
         </div>
+
         <div className="grid gap-3 md:grid-cols-7">
           {days.map((day) => (
             <article key={day} className="min-h-40 rounded-lg border border-border p-3">
               <h3 className="text-xs font-semibold text-muted-foreground">{day}</h3>
               {day.startsWith("16") && (
-                <div className="mt-3 rounded-md bg-primary/10 p-2 text-xs text-primary">12:30 - Java</div>
+                <div className="mt-3 rounded-md bg-primary/10 p-2 text-xs text-primary">
+                  12:30 - Java
+                </div>
               )}
             </article>
           ))}
@@ -374,33 +535,66 @@ export function StudentsPage() {
       <section className="rounded-xl border border-border bg-card p-5 shadow-card">
         <div className="mb-4 flex items-center justify-between">
           <h1 className="font-display text-2xl font-bold">Tələbələr</h1>
-          <Button size="sm" disabled={create.isPending}
+
+          <Button
+            size="sm"
+            disabled={create.isPending}
             onClick={async () => {
               try {
                 if (!firstName.trim() || !lastName.trim()) {
-                  toast({ title: "Xəta", description: "Ad və soyad doldurulmalıdır.", variant: "destructive" });
+                  toast({
+                    title: "Xəta",
+                    description: "Ad və soyad doldurulmalıdır.",
+                    variant: "destructive",
+                  });
                   return;
                 }
-                await create.mutateAsync({ firstName: firstName.trim(), lastName: lastName.trim(), subgroup: subgroup.trim() || null, lessonFormat: lessonFormat.trim() || null });
-                setFirstName(""); setLastName(""); setSubgroup(""); setLessonFormat("");
+
+                await create.mutateAsync({
+                  firstName: firstName.trim(),
+                  lastName: lastName.trim(),
+                  subgroup: subgroup.trim() || null,
+                  lessonFormat: lessonFormat.trim() || null,
+                });
+
+                setFirstName("");
+                setLastName("");
+                setSubgroup("");
+                setLessonFormat("");
+
                 toast({ title: "Uğurlu", description: "Tələbə əlavə edildi." });
               } catch (e: unknown) {
-                toast({ title: "Xəta", description: (e as Error)?.message ?? "Əlavə etmək alınmadı.", variant: "destructive" });
+                toast({
+                  title: "Xəta",
+                  description: (e as Error)?.message ?? "Əlavə etmək alınmadı.",
+                  variant: "destructive",
+                });
               }
             }}
           >
             Yeni tələbə
           </Button>
         </div>
+
         <div className="grid gap-3 md:grid-cols-3">
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Ad / soyad axtar..." />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Ad / soyad axtar..."
+          />
           <Input value={subgroup} onChange={(e) => setSubgroup(e.target.value)} placeholder="Alt qrup" />
-          <Input value={lessonFormat} onChange={(e) => setLessonFormat(e.target.value)} placeholder="Dərs formatı (Campus/Online)" />
+          <Input
+            value={lessonFormat}
+            onChange={(e) => setLessonFormat(e.target.value)}
+            placeholder="Dərs formatı (Campus/Online)"
+          />
         </div>
+
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Ad" />
           <Input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Soyad" />
         </div>
+
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
@@ -412,9 +606,24 @@ export function StudentsPage() {
                 <th className="px-3 py-2 text-right">Əməliyyat</th>
               </tr>
             </thead>
+
             <tbody className="divide-y divide-border">
-              {list.isLoading && <tr><td className="px-3 py-3 text-muted-foreground" colSpan={5}>Yüklənir...</td></tr>}
-              {list.isError && <tr><td className="px-3 py-3 text-destructive" colSpan={5}>Data alınmadı: {(list.error as Error)?.message ?? "Xəta"}</td></tr>}
+              {list.isLoading && (
+                <tr>
+                  <td className="px-3 py-3 text-muted-foreground" colSpan={5}>
+                    Yüklənir...
+                  </td>
+                </tr>
+              )}
+
+              {list.isError && (
+                <tr>
+                  <td className="px-3 py-3 text-destructive" colSpan={5}>
+                    Data alınmadı: {(list.error as Error)?.message ?? "Xəta"}
+                  </td>
+                </tr>
+              )}
+
               {list.data?.items?.map((s) => (
                 <tr key={s.id}>
                   <td className="px-3 py-2">{s.firstName}</td>
@@ -422,13 +631,20 @@ export function StudentsPage() {
                   <td className="px-3 py-2">{s.subgroup ?? "-"}</td>
                   <td className="px-3 py-2">{s.lessonFormat ?? "-"}</td>
                   <td className="px-3 py-2 text-right">
-                    <Button variant="destructive" size="sm" disabled={del.isPending}
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={del.isPending}
                       onClick={async () => {
                         try {
                           await del.mutateAsync(s.id!);
                           toast({ title: "Silindi", description: "Tələbə silindi." });
                         } catch (e: unknown) {
-                          toast({ title: "Xəta", description: (e as Error)?.message ?? "Silmək alınmadı.", variant: "destructive" });
+                          toast({
+                            title: "Xəta",
+                            description: (e as Error)?.message ?? "Silmək alınmadı.",
+                            variant: "destructive",
+                          });
                         }
                       }}
                     >
@@ -449,12 +665,16 @@ export function StudentsPage() {
 
 export function CoursesPage() {
   const [search, setSearch] = React.useState("");
+  const [showCreate, setShowCreate] = React.useState(false);
   const [name, setName] = React.useState("");
   const [duration, setDuration] = React.useState("");
   const [price, setPrice] = React.useState("");
   const [description, setDescription] = React.useState("");
+  const [categoryId, setCategoryId] = React.useState("");
+  const [isActive, setIsActive] = React.useState(true);
 
   const list = useCourses(search);
+  const categories = useCategories();
   const create = useCreateCourse();
   const del = useDeleteCourse();
 
@@ -463,53 +683,172 @@ export function CoursesPage() {
       <section className="rounded-xl border border-border bg-card p-5 shadow-card">
         <div className="mb-4 flex items-center justify-between">
           <h1 className="font-display text-2xl font-bold">Kurslar</h1>
-          <Button size="sm" disabled={create.isPending}
-            onClick={async () => {
-              try {
-                if (!name.trim()) {
-                  toast({ title: "Xəta", description: "Kurs adı boş ola bilməz.", variant: "destructive" });
-                  return;
-                }
-                await create.mutateAsync({ name: name.trim(), description: description.trim() || undefined, duration: duration ? Number(duration) : undefined, price: price ? Number(price) : undefined });
-                setName(""); setDuration(""); setPrice(""); setDescription("");
-                toast({ title: "Uğurlu", description: "Kurs əlavə edildi." });
-              } catch (e: unknown) {
-                toast({ title: "Xəta", description: (e as Error)?.message ?? "Əlavə etmək alınmadı.", variant: "destructive" });
-              }
-            }}
-          >
+
+          <Button size="sm" onClick={() => setShowCreate(true)}>
+            <Plus className="mr-1 h-4 w-4" />
             Yeni kurs
           </Button>
         </div>
+
         <div className="grid gap-3 md:grid-cols-4">
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Axtar..." />
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Kurs adı" />
-          <Input value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="Müddət (ay)" type="number" />
-          <Input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Qiymət (AZN)" type="number" />
         </div>
-        <div className="mt-3">
-          <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Təsvir (istəyə görə)" />
-        </div>
+
+        <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Yeni Kurs Əlavə et">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Kurs adı *" />
+            <Input
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              placeholder="Müddət (ay) *"
+              type="number"
+            />
+            <Input
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              placeholder="Qiymət (AZN) *"
+              type="number"
+            />
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Təsvir (istəyə görə)"
+            />
+
+            <select
+              className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+            >
+              <option value="">Kateqoriya seçin</option>
+              {(categories.data ?? []).map((cat) => (
+                <option key={cat.id ?? cat._id} value={cat.id ?? cat._id}>
+                  {cat.name}
+                </option>
+              ))}
+            </select>
+
+            <div className="flex items-center rounded-lg border border-input bg-background px-3 py-2">
+              <input
+                type="checkbox"
+                id="isActive"
+                checked={isActive}
+                onChange={(e) => setIsActive(e.target.checked)}
+                className="h-4 w-4 rounded border border-input"
+              />
+              <label htmlFor="isActive" className="ml-2 cursor-pointer text-sm">
+                Aktiv
+              </label>
+            </div>
+
+            <div className="flex gap-2 sm:col-span-2">
+              <Button
+                size="sm"
+                disabled={create.isPending}
+                onClick={async () => {
+                  try {
+                    if (!name.trim()) {
+                      toast({
+                        title: "Xəta",
+                        description: "Kurs adı boş ola bilməz.",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+
+                    if (!duration) {
+                      toast({
+                        title: "Xəta",
+                        description: "Müddət tələb olunur.",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+
+                    if (!price) {
+                      toast({
+                        title: "Xəta",
+                        description: "Qiymət tələb olunur.",
+                        variant: "destructive",
+                      });
+                      return;
+                    }
+
+                    await create.mutateAsync({
+                      name: name.trim(),
+                      description: description.trim() || undefined,
+                      duration: Number(duration),
+                      price: Number(price),
+                      isActive,
+                      categoryId: categoryId || undefined,
+                    });
+
+                    setName("");
+                    setDuration("");
+                    setPrice("");
+                    setDescription("");
+                    setCategoryId("");
+                    setIsActive(true);
+                    setShowCreate(false);
+
+                    toast({ title: "Uğurlu", description: "Kurs əlavə edildi." });
+                  } catch (e: unknown) {
+                    toast({
+                      title: "Xəta",
+                      description: (e as Error)?.message ?? "Əlavə etmək alınmadı.",
+                      variant: "destructive",
+                    });
+                  }
+                }}
+              >
+                Əlavə et
+              </Button>
+
+              <Button size="sm" variant="outline" onClick={() => setShowCreate(false)}>
+                Ləğv et
+              </Button>
+            </div>
+          </div>
+        </Modal>
+
         <div className="mt-4 space-y-3">
           {list.isLoading && <p className="text-sm text-muted-foreground">Yüklənir...</p>}
-          {list.isError && <p className="text-sm text-destructive">Data alınmadı: {(list.error as Error)?.message ?? "Xəta"}</p>}
+          {list.isError && (
+            <p className="text-sm text-destructive">
+              Data alınmadı: {(list.error as Error)?.message ?? "Xəta"}
+            </p>
+          )}
+
           {list.data?.items?.map((course) => (
-            <article key={course.id} className="flex items-center justify-between rounded-lg border border-border p-4">
+            <article
+              key={course.id}
+              className="flex items-center justify-between rounded-lg border border-border p-4"
+            >
               <div className="min-w-0">
                 <p className="truncate font-medium">{course.name}</p>
                 <p className="text-xs text-muted-foreground">
                   {course.duration ? `${course.duration} ay` : "Müddət yoxdur"}
                   {course.price ? ` · ${course.price} AZN` : ""}
                 </p>
-                {course.description && <p className="mt-0.5 text-xs text-muted-foreground">{course.description}</p>}
+                {course.description && (
+                  <p className="mt-0.5 text-xs text-muted-foreground">{course.description}</p>
+                )}
               </div>
-              <Button variant="destructive" size="sm" disabled={del.isPending}
+
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={del.isPending}
                 onClick={async () => {
                   try {
                     await del.mutateAsync(course.id!);
                     toast({ title: "Deaktiv edildi", description: "Kurs deaktiv edildi." });
                   } catch (e: unknown) {
-                    toast({ title: "Xəta", description: (e as Error)?.message ?? "Xəta baş verdi.", variant: "destructive" });
+                    toast({
+                      title: "Xəta",
+                      description: (e as Error)?.message ?? "Xəta baş verdi.",
+                      variant: "destructive",
+                    });
                   }
                 }}
               >
@@ -523,9 +862,103 @@ export function CoursesPage() {
   );
 }
 
+
+// ---- CATEGORIES ----
+
+export function CategoriesPage() {
+  const categories = useCategories();
+
+  const items = (categories.data ?? []) as Array<{
+    id?: string;
+    _id?: string;
+    name?: string;
+    description?: string;
+    isActive?: boolean;
+  }>;
+
+  return (
+    <PageShell>
+      <section className="rounded-xl border border-border bg-card p-5 shadow-card">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h1 className="font-display text-2xl font-bold">Kateqoriyalar</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Kurs kateqoriyalarının siyahısı
+            </p>
+          </div>
+        </div>
+
+        {categories.isLoading && (
+          <p className="text-sm text-muted-foreground">Yüklənir...</p>
+        )}
+
+        {categories.isError && (
+          <p className="text-sm text-destructive">
+            Kateqoriyalar alınmadı: {(categories.error as Error)?.message ?? "Xəta"}
+          </p>
+        )}
+
+        {!categories.isLoading && !categories.isError && items.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            Hələ kateqoriya yoxdur.
+          </p>
+        )}
+
+        {items.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 text-left">Ad</th>
+                  <th className="px-3 py-2 text-left">Təsvir</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-border">
+                {items.map((category) => (
+                  <tr key={category.id ?? category._id ?? category.name}>
+                    <td className="px-3 py-2 font-medium">
+                      {category.name ?? "-"}
+                    </td>
+
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {category.description ?? "-"}
+                    </td>
+
+                    <td className="px-3 py-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          category.isActive === false
+                            ? "bg-destructive/10 text-destructive"
+                            : "bg-green-500/10 text-green-600"
+                        }`}
+                      >
+                        {category.isActive === false ? "Deaktiv" : "Aktiv"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </PageShell>
+  );
+}
+
 // ---- REPORTS ----
 
-function StatCard({ label, value, isLoading }: { label: string; value?: string | number; isLoading?: boolean }) {
+function StatCard({
+  label,
+  value,
+  isLoading,
+}: {
+  label: string;
+  value?: string | number;
+  isLoading?: boolean;
+}) {
   return (
     <section className="rounded-xl border border-border bg-card p-5 shadow-card">
       <p className="text-sm text-muted-foreground">{label}</p>
@@ -546,15 +979,26 @@ export function ReportsPage() {
           Hesabat alınmadı: {(stats.error as Error)?.message ?? "Xəta"}
         </p>
       )}
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Yeni leadlar (bu ay)" value={stats.data?.newLeadsThisMonth} isLoading={stats.isLoading} />
         <StatCard label="Aktiv tələbələr" value={stats.data?.activeStudents} isLoading={stats.isLoading} />
-        <StatCard label="Toplanan ödənişlər (AZN)" value={stats.data ? stats.data.collectedPaymentsThisMonth.toFixed(2) : undefined} isLoading={stats.isLoading} />
-        <StatCard label="Gecikmiş ödəniş (AZN)" value={stats.data ? stats.data.overdueAmount.toFixed(2) : undefined} isLoading={stats.isLoading} />
+        <StatCard
+          label="Toplanan ödənişlər (AZN)"
+          value={stats.data ? stats.data.collectedPaymentsThisMonth.toFixed(2) : undefined}
+          isLoading={stats.isLoading}
+        />
+        <StatCard
+          label="Gecikmiş ödəniş (AZN)"
+          value={stats.data ? stats.data.overdueAmount.toFixed(2) : undefined}
+          isLoading={stats.isLoading}
+        />
       </div>
+
       {stats.data?.courseDistribution && stats.data.courseDistribution.length > 0 && (
         <section className="mt-6 rounded-xl border border-border bg-card p-5 shadow-card">
           <h2 className="mb-4 font-display text-lg font-bold">Kurs üzrə tələbə statistikası</h2>
+
           <div className="space-y-3">
             {stats.data.courseDistribution.map((c) => (
               <div key={c.name} className="flex items-center gap-3">
@@ -562,7 +1006,9 @@ export function ReportsPage() {
                 <div className="h-3 flex-1 rounded-full bg-muted">
                   <div
                     className="h-3 rounded-full bg-primary transition-all"
-                    style={{ width: `${Math.min((c.value / (stats.data!.activeStudents || 1)) * 100, 100)}%` }}
+                    style={{
+                      width: `${Math.min((c.value / (stats.data!.activeStudents || 1)) * 100, 100)}%`,
+                    }}
                   />
                 </div>
                 <span className="w-6 text-right text-sm font-medium">{c.value}</span>
@@ -584,31 +1030,59 @@ export function SettingsPage() {
   const [supportEmail, setSupportEmail] = React.useState("");
 
   React.useEffect(() => {
-    if (q.data) { setCompanyName(q.data.companyName ?? ""); setSupportEmail(q.data.supportEmail ?? ""); }
+    if (q.data) {
+      setCompanyName(q.data.companyName ?? "");
+      setSupportEmail(q.data.supportEmail ?? "");
+    }
   }, [q.data]);
 
   return (
     <PageShell>
       <section className="rounded-xl border border-border bg-card p-5 shadow-card">
         <h1 className="font-display text-2xl font-bold">Ayarlar</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Sistem parametrlərini buradan idarə edə bilərsiniz.</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Sistem parametrlərini buradan idarə edə bilərsiniz.
+        </p>
+
         <div className="mt-5 grid gap-3 md:grid-cols-2">
-          <Input placeholder="Şirkət adı" value={companyName} onChange={(e) => setCompanyName(e.target.value)} disabled={q.isLoading || save.isPending} />
-          <Input placeholder="Dəstək e-poçtu" value={supportEmail} onChange={(e) => setSupportEmail(e.target.value)} disabled={q.isLoading || save.isPending} />
-          <Button className="md:col-span-2 justify-self-start" disabled={q.isLoading || save.isPending}
+          <Input
+            placeholder="Şirkət adı"
+            value={companyName}
+            onChange={(e) => setCompanyName(e.target.value)}
+            disabled={q.isLoading || save.isPending}
+          />
+          <Input
+            placeholder="Dəstək e-poçtu"
+            value={supportEmail}
+            onChange={(e) => setSupportEmail(e.target.value)}
+            disabled={q.isLoading || save.isPending}
+          />
+
+          <Button
+            className="justify-self-start md:col-span-2"
+            disabled={q.isLoading || save.isPending}
             onClick={async () => {
               try {
                 await save.mutateAsync({ companyName, supportEmail });
                 toast({ title: "Uğurlu", description: "Ayarlar yadda saxlanıldı." });
               } catch (e: unknown) {
-                toast({ title: "Xəta", description: (e as Error)?.message ?? "Yadda saxlamaq alınmadı.", variant: "destructive" });
+                toast({
+                  title: "Xəta",
+                  description: (e as Error)?.message ?? "Yadda saxlamaq alınmadı.",
+                  variant: "destructive",
+                });
               }
             }}
           >
             Yadda saxla
           </Button>
         </div>
-        {q.isError && <p className="mt-4 text-sm text-destructive">Ayarlar alınmadı: {(q.error as Error)?.message ?? "Xəta"}</p>}
+
+        {q.isError && (
+          <p className="mt-4 text-sm text-destructive">
+            Ayarlar alınmadı: {(q.error as Error)?.message ?? "Xəta"}
+          </p>
+        )}
       </section>
     </PageShell>
   );
@@ -635,19 +1109,30 @@ export function AttendancePage() {
   React.useEffect(() => {
     if (enrollments.data) {
       const init: Record<string, AttendanceStatus> = {};
-      enrollments.data.forEach((e) => { init[e._id!] = "Present"; });
+      enrollments.data.forEach((e) => {
+        init[e._id!] = "Present";
+      });
       setStatuses(init);
     }
   }, [enrollments.data]);
 
   const handleSave = async () => {
     if (!selectedGroupId || !enrollments.data?.length) return;
-    const records = enrollments.data.map((e) => ({ enrollmentId: e._id!, status: statuses[e._id!] ?? "Present" }));
+
+    const records = enrollments.data.map((e) => ({
+      enrollmentId: e._id!,
+      status: statuses[e._id!] ?? "Present",
+    }));
+
     try {
       await bulkMark.mutateAsync({ groupId: selectedGroupId, date, records });
       toast({ title: "Uğurlu", description: "Davamiyyət qeydə alındı." });
     } catch (e: unknown) {
-      toast({ title: "Xəta", description: (e as Error)?.message, variant: "destructive" });
+      toast({
+        title: "Xəta",
+        description: (e as Error)?.message,
+        variant: "destructive",
+      });
     }
   };
 
@@ -656,10 +1141,14 @@ export function AttendancePage() {
       <section className="rounded-xl border border-border bg-card p-5 shadow-card">
         <div className="mb-5 flex items-center justify-between">
           <h1 className="font-display text-2xl font-bold">Davamiyyət</h1>
-          <Button onClick={handleSave} disabled={bulkMark.isPending || !selectedGroupId || !enrollments.data?.length}>
+          <Button
+            onClick={handleSave}
+            disabled={bulkMark.isPending || !selectedGroupId || !enrollments.data?.length}
+          >
             {bulkMark.isPending ? "Saxlanır..." : "Yadda saxla"}
           </Button>
         </div>
+
         <div className="mb-5 flex flex-wrap gap-3">
           <select
             className="rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -669,16 +1158,21 @@ export function AttendancePage() {
             <option value="">Qrup seçin...</option>
             {groups.data?.items?.map((g) => (
               <option key={g.id} value={g.id}>
-                {g.code}{typeof g.courseId === "object" && g.courseId?.name ? ` — ${g.courseId.name}` : ""}
+                {g.code}
+                {typeof g.courseId === "object" && g.courseId?.name ? ` — ${g.courseId.name}` : ""}
               </option>
             ))}
           </select>
+
           <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-auto" />
         </div>
+
         {enrollments.isLoading && <p className="text-sm text-muted-foreground">Tələbələr yüklənir...</p>}
+
         {selectedGroupId && !enrollments.isLoading && !enrollments.data?.length && (
           <p className="text-sm text-muted-foreground">Bu qrupda tələbə yoxdur.</p>
         )}
+
         {enrollments.data && enrollments.data.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -687,15 +1181,23 @@ export function AttendancePage() {
                   <th className="px-3 py-2 text-left">Tələbə</th>
                   <th className="px-3 py-2 text-left">Kod</th>
                   {ATTENDANCE_OPTIONS.map((o) => (
-                    <th key={o.value} className="px-3 py-2 text-center">{o.label}</th>
+                    <th key={o.value} className="px-3 py-2 text-center">
+                      {o.label}
+                    </th>
                   ))}
                 </tr>
               </thead>
+
               <tbody className="divide-y divide-border">
                 {enrollments.data.map((e) => (
                   <tr key={e._id}>
-                    <td className="px-3 py-2 font-medium">{e.studentId.firstName} {e.studentId.lastName}</td>
-                    <td className="px-3 py-2 text-muted-foreground">{e.studentId.studentCode ?? "-"}</td>
+                    <td className="px-3 py-2 font-medium">
+                      {e.studentId.firstName} {e.studentId.lastName}
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {e.studentId.studentCode ?? "-"}
+                    </td>
+
                     {ATTENDANCE_OPTIONS.map((o) => (
                       <td key={o.value} className="px-3 py-2 text-center">
                         <input
@@ -703,7 +1205,12 @@ export function AttendancePage() {
                           name={`att-${e._id}`}
                           value={o.value}
                           checked={statuses[e._id!] === o.value}
-                          onChange={() => setStatuses((prev) => ({ ...prev, [e._id!]: o.value }))}
+                          onChange={() =>
+                            setStatuses((prev) => ({
+                              ...prev,
+                              [e._id!]: o.value,
+                            }))
+                          }
                           className="cursor-pointer accent-primary"
                         />
                       </td>
@@ -730,11 +1237,18 @@ export function PaymentsPage() {
       <section className="rounded-xl border border-border bg-card p-5 shadow-card">
         <h1 className="mb-1 font-display text-2xl font-bold">Ödənişlər</h1>
         <h2 className="mb-4 text-base font-semibold text-destructive">Gecikmiş ödənişlər</h2>
+
         {overdueQ.isLoading && <p className="text-sm text-muted-foreground">Yüklənir...</p>}
-        {overdueQ.isError && <p className="text-sm text-destructive">Data alınmadı: {(overdueQ.error as Error)?.message}</p>}
+        {overdueQ.isError && (
+          <p className="text-sm text-destructive">
+            Data alınmadı: {(overdueQ.error as Error)?.message}
+          </p>
+        )}
+
         {overdueQ.data && overdueQ.data.length === 0 && (
           <p className="text-sm text-muted-foreground">Gecikmiş ödəniş yoxdur.</p>
         )}
+
         {overdueQ.data && overdueQ.data.length > 0 && (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -748,28 +1262,47 @@ export function PaymentsPage() {
                   <th className="px-3 py-2 text-right">Əməliyyat</th>
                 </tr>
               </thead>
+
               <tbody className="divide-y divide-border">
                 {overdueQ.data.map((p) => {
                   const plan = typeof p.paymentPlanId === "object" ? p.paymentPlanId : null;
                   const student = plan?.enrollmentId?.studentId;
                   const group = plan?.enrollmentId?.groupId;
+
                   return (
                     <tr key={p._id}>
-                      <td className="px-3 py-2">{student ? `${student.firstName} ${student.lastName}` : "-"}</td>
+                      <td className="px-3 py-2">
+                        {student ? `${student.firstName} ${student.lastName}` : "-"}
+                      </td>
                       <td className="px-3 py-2">{group?.code ?? "-"}</td>
                       <td className="px-3 py-2 font-medium">{p.amount?.toFixed(2) ?? "-"} AZN</td>
-                      <td className="px-3 py-2">{p.dueDate ? new Date(p.dueDate).toLocaleDateString("az-AZ") : "-"}</td>
                       <td className="px-3 py-2">
-                        <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive">{p.status}</span>
+                        {p.dueDate ? new Date(p.dueDate).toLocaleDateString("az-AZ") : "-"}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive">
+                          {p.status}
+                        </span>
                       </td>
                       <td className="px-3 py-2 text-right">
-                        <Button size="sm" disabled={updateStatus.isPending}
+                        <Button
+                          size="sm"
+                          disabled={updateStatus.isPending}
                           onClick={async () => {
                             try {
-                              await updateStatus.mutateAsync({ id: p._id!, status: "Paid", paidDate: new Date().toISOString(), paymentMethod: "Cash" });
+                              await updateStatus.mutateAsync({
+                                id: p._id!,
+                                status: "Paid",
+                                paidDate: new Date().toISOString(),
+                                paymentMethod: "Cash",
+                              });
                               toast({ title: "Ödənildi", description: "Ödəniş qeyd edildi." });
                             } catch (e: unknown) {
-                              toast({ title: "Xəta", description: (e as Error)?.message, variant: "destructive" });
+                              toast({
+                                title: "Xəta",
+                                description: (e as Error)?.message,
+                                variant: "destructive",
+                              });
                             }
                           }}
                         >

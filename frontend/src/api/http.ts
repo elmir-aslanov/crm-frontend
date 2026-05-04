@@ -18,21 +18,24 @@ export class ApiError extends Error {
 const DEFAULT_TIMEOUT_MS = 20000;
 
 function getBaseUrl() {
-  // If not provided, we fall back to same-origin (useful behind a proxy).
-  const envUrl = (import.meta as any).env?.VITE_API_URL as string | undefined;
+  const envUrl = import.meta.env.VITE_API_URL as string | undefined;
   return (envUrl ?? "").replace(/\/+$/, "");
 }
 
 function buildUrl(path: string) {
   const base = getBaseUrl();
-  if (!base) return path; // same-origin
+
+  if (!base) return path;
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
+
   return `${base}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
-async function parseJsonSafe(res: Response) {
+async function parseJsonSafe(res: Response): Promise<unknown> {
   const text = await res.text();
+
   if (!text) return undefined;
+
   try {
     return JSON.parse(text);
   } catch {
@@ -50,6 +53,13 @@ export async function apiFetch<T>(
 
   try {
     const headers = new Headers(init.headers);
+
+    const token = localStorage.getItem("accessToken");
+
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+
     if (!headers.has("Content-Type") && init.body) {
       headers.set("Content-Type", "application/json");
     }
@@ -61,22 +71,27 @@ export async function apiFetch<T>(
       signal: controller.signal,
     });
 
-    const payload = (await parseJsonSafe(res)) as unknown;
+    const payload = await parseJsonSafe(res);
+
     if (!res.ok) {
+      const payloadObj = payload as ApiErrorPayload | undefined;
+
       const message =
-        (payload as any)?.message ||
+        payloadObj?.message ||
         (typeof payload === "string" ? payload : undefined) ||
         `HTTP ${res.status}`;
-      throw new ApiError(res.status, message, payload as ApiErrorPayload | undefined);
+
+      throw new ApiError(res.status, message, payloadObj);
     }
+
     return payload as T;
-  } catch (e: any) {
-    if (e?.name === "AbortError") {
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name === "AbortError") {
       throw new ApiError(408, "Sorğu vaxtı bitdi (timeout).");
     }
+
     throw e;
   } finally {
     clearTimeout(id);
   }
 }
-

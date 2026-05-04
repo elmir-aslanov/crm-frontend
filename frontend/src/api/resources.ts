@@ -1,5 +1,5 @@
 ﻿import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "./http";
+import { ApiError, apiFetch } from "./http";
 
 export type Id = string;
 
@@ -75,13 +75,17 @@ export type Enrollment = {
   status?: string;
 };
 
-export type LeadStatus =
-  | "New"
-  | "Contacted"
-  | "Interested"
-  | "Trial"
-  | "Enrolled"
-  | "Lost";
+// ✅ FIXED: Runtime array + TypeScript type
+export const LEAD_STATUSES = [
+  "New",
+  "Contacted",
+  "Interested",
+  "Trial",
+  "Enrolled",
+  "Lost",
+] as const;
+
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
 
 export type Lead = {
   id?: Id;
@@ -94,6 +98,7 @@ export type Lead = {
   status?: LeadStatus;
   courseInterest?: { _id: string; name: string } | string | null;
   assignedTo?: { _id: string; firstName: string; lastName: string } | string | null;
+  utmSource?: string | null;
   createdAt?: string;
 };
 
@@ -133,8 +138,15 @@ export type Payment = {
   paymentPlanId?:
     | {
         enrollmentId?: {
-          studentId?: { firstName: string; lastName: string; studentCode?: string };
-          groupId?: { code: string; courseId?: { name: string } };
+          studentId?: {
+            firstName: string;
+            lastName: string;
+            studentCode?: string;
+          };
+          groupId?: {
+            code: string;
+            courseId?: { name: string };
+          };
         };
       }
     | string;
@@ -173,38 +185,57 @@ export type ListResponse<T> = {
 // ---- HELPERS ----
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeList<T extends { id?: string; _id?: string }>(data: any): ListResponse<T> {
+function normalizeList<T extends { id?: string; _id?: string }>(
+  data: any
+): ListResponse<T> {
   const unwrapped =
-    data !== null && typeof data === "object" && "success" in data && "data" in data
+    data !== null &&
+    typeof data === "object" &&
+    "success" in data &&
+    "data" in data
       ? data.data
       : data;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const arr: any[] = Array.isArray(unwrapped)
     ? unwrapped
-    : Array.isArray(unwrapped?.items)   ? unwrapped.items
-    : Array.isArray(unwrapped?.leads)   ? unwrapped.leads
-    : Array.isArray(unwrapped?.users)   ? unwrapped.users
-    : Array.isArray(unwrapped?.courses) ? unwrapped.courses
-    : Array.isArray(unwrapped?.groups)  ? unwrapped.groups
-    : Array.isArray(unwrapped?.students)? unwrapped.students
-    : Array.isArray(unwrapped?.data)    ? unwrapped.data
-    : [];
+    : Array.isArray(unwrapped?.items)
+      ? unwrapped.items
+      : Array.isArray(unwrapped?.leads)
+        ? unwrapped.leads
+        : Array.isArray(unwrapped?.users)
+          ? unwrapped.users
+          : Array.isArray(unwrapped?.courses)
+            ? unwrapped.courses
+            : Array.isArray(unwrapped?.groups)
+              ? unwrapped.groups
+              : Array.isArray(unwrapped?.students)
+                ? unwrapped.students
+                : Array.isArray(unwrapped?.data)
+                  ? unwrapped.data
+                  : [];
 
   const pagination = unwrapped?.pagination ?? {};
 
   return {
-    items: arr.map((item: any) => ({ ...item, id: item.id ?? item._id })) as T[],
+    items: arr.map((item: any) => ({
+      ...item,
+      id: item.id ?? item._id,
+    })) as T[],
     total: unwrapped?.total ?? pagination?.total ?? arr.length,
     page: unwrapped?.page ?? pagination?.page,
     limit: unwrapped?.limit ?? pagination?.limit,
-    totalPages: unwrapped?.pages ?? unwrapped?.totalPages ?? pagination?.totalPages,
+    totalPages:
+      unwrapped?.pages ?? unwrapped?.totalPages ?? pagination?.totalPages,
   };
 }
 
 // ---- AUTH ----
 
-export type LoginPayload = { email: string; password: string };
+export type LoginPayload = {
+  email: string;
+  password: string;
+};
 
 export type AuthResponse = {
   success: boolean;
@@ -219,14 +250,81 @@ export type AuthResponse = {
   };
 };
 
+type AuthLikeData = {
+  _id?: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  role?: string;
+  accessToken?: string;
+  token?: string;
+  user?: Record<string, unknown>;
+};
+
+function extractAuthData(res: unknown) {
+  const root = (res ?? {}) as Record<string, unknown>;
+  const data = (root.data ?? root) as AuthLikeData;
+
+  const token =
+    (typeof data.accessToken === "string" && data.accessToken) ||
+    (typeof data.token === "string" && data.token) ||
+    (typeof root.accessToken === "string" && root.accessToken) ||
+    (typeof root.token === "string" && root.token) ||
+    "";
+
+  if (!token) {
+    throw new Error("Login cavabinda token tapilmadi");
+  }
+
+  const user =
+    (typeof data.user === "object" && data.user !== null ? data.user : null) ?? {
+      _id: data._id,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      email: data.email,
+      role: data.role,
+    };
+
+  return { token, user };
+}
+
 export function useLogin() {
   const qc = useQueryClient();
+
   return useMutation({
-    mutationFn: (payload: LoginPayload) =>
-      apiFetch<AuthResponse>("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+    mutationFn: async (payload: LoginPayload) => {
+      const attempts: Array<Record<string, string>> = [
+        { email: payload.email, password: payload.password },
+        { username: payload.email, password: payload.password },
+        { identifier: payload.email, password: payload.password },
+        { emailOrUsername: payload.email, password: payload.password },
+      ];
+
+      let lastError: unknown;
+
+      for (const body of attempts) {
+        try {
+          return await apiFetch<AuthResponse>("/auth/login", {
+            method: "POST",
+            body: JSON.stringify(body),
+          });
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 401) {
+            lastError = error;
+            continue;
+          }
+
+          throw error;
+        }
+      }
+
+      throw lastError ?? new Error("Login alinmadi");
+    },
     onSuccess: (res) => {
-      localStorage.setItem("accessToken", res.data.accessToken);
-      localStorage.setItem("user", JSON.stringify(res.data));
+      const { token, user } = extractAuthData(res);
+
+      localStorage.setItem("accessToken", token);
+      localStorage.setItem("user", JSON.stringify(user));
       qc.invalidateQueries();
     },
   });
@@ -252,27 +350,38 @@ export function useStudents(search?: string) {
 
 export function useCreateStudent() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: (payload: Omit<Student, "id" | "_id">) =>
-      apiFetch<unknown>("/students", { method: "POST", body: JSON.stringify(payload) }),
+      apiFetch<unknown>("/students", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["students"] }),
   });
 }
 
 export function useUpdateStudent() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: ({ id, ...patch }: Partial<Student> & { id: Id }) =>
-      apiFetch<unknown>(`/students/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(patch) }),
+      apiFetch<unknown>(`/students/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["students"] }),
   });
 }
 
 export function useDeleteStudent() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: (id: Id) =>
-      apiFetch<unknown>(`/students/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      apiFetch<unknown>(`/students/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["students"] }),
   });
 }
@@ -300,9 +409,13 @@ export type CreateUserPayload = {
 
 export function useCreateUser() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: (payload: CreateUserPayload) =>
-      apiFetch<unknown>("/auth/register", { method: "POST", body: JSON.stringify(payload) }),
+      apiFetch<unknown>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["users"] }),
   });
 }
@@ -319,6 +432,31 @@ export function useCategories() {
   });
 }
 
+export function useCreateCategory() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Omit<Category, "id" | "_id">) =>
+      apiFetch<unknown>("/courses/categories", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["categories"] }),
+  });
+}
+
+export function useDeleteCategory() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: (id: Id) =>
+      apiFetch<unknown>(`/courses/categories/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["categories"] }),
+  });
+}
+
 // ---- COURSES ----
 
 export function useCourses(search?: string) {
@@ -327,11 +465,14 @@ export function useCourses(search?: string) {
     queryFn: async () => {
       const data = await apiFetch<unknown>("/courses");
       const list = normalizeList<Course>(data);
+
       let items = list.items.filter((c) => c.isActive !== false);
+
       if (search) {
         const q = search.toLowerCase();
         items = items.filter((c) => c.name?.toLowerCase().includes(q));
       }
+
       return { ...list, items };
     },
   });
@@ -343,22 +484,31 @@ export function useFeaturedCourses() {
     queryFn: async () => {
       const data = await apiFetch<unknown>("/courses");
       const list = normalizeList<Course>(data);
-      return { ...list, items: list.items.filter((c) => c.isActive !== false) };
+
+      return {
+        ...list,
+        items: list.items.filter((c) => c.isActive !== false),
+      };
     },
   });
 }
 
 export function useCreateCourse() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: (payload: Omit<Course, "id" | "_id">) =>
-      apiFetch<unknown>("/courses", { method: "POST", body: JSON.stringify(payload) }),
+      apiFetch<unknown>("/courses", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["courses"] }),
   });
 }
 
 export function useDeleteCourse() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: (id: Id) =>
       apiFetch<unknown>(`/courses/${encodeURIComponent(id)}`, {
@@ -381,7 +531,9 @@ export function useGroups(params: { search?: string; courseId?: string } = {}) {
   });
 }
 
-export function useOpenGroups(params: { search?: string; courseId?: string } = {}) {
+export function useOpenGroups(
+  params: { search?: string; courseId?: string } = {}
+) {
   return useQuery({
     queryKey: ["groups", "open", params],
     queryFn: async () => {
@@ -395,7 +547,9 @@ export function useGroupStudents(groupId?: Id) {
   return useQuery({
     queryKey: ["groups", groupId, "students"],
     queryFn: async () => {
-      const data = await apiFetch<unknown>(`/groups/${encodeURIComponent(groupId!)}/students`);
+      const data = await apiFetch<unknown>(
+        `/groups/${encodeURIComponent(groupId!)}/students`
+      );
       return (Array.isArray(data) ? data : []) as Enrollment[];
     },
     enabled: !!groupId,
@@ -408,7 +562,9 @@ export function useLeads(params: { status?: string } = {}) {
   return useQuery({
     queryKey: ["leads", params],
     queryFn: async () => {
-      const qs = params.status ? `?status=${encodeURIComponent(params.status)}` : "";
+      const qs = params.status
+        ? `?status=${encodeURIComponent(params.status)}`
+        : "";
       const data = await apiFetch<unknown>(`/leads${qs}`);
       return normalizeList<Lead>(data);
     },
@@ -417,17 +573,30 @@ export function useLeads(params: { status?: string } = {}) {
 
 export function useCreateLead() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: (payload: Omit<Lead, "id" | "_id">) =>
-      apiFetch<unknown>("/leads", { method: "POST", body: JSON.stringify(payload) }),
+      apiFetch<unknown>("/leads", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["leads"] }),
   });
 }
 
 export function useUpdateLeadStatus() {
   const qc = useQueryClient();
+
   return useMutation({
-    mutationFn: ({ id, status, comment }: { id: Id; status: string; comment?: string }) =>
+    mutationFn: ({
+      id,
+      status,
+      comment,
+    }: {
+      id: Id;
+      status: LeadStatus | string;
+      comment?: string;
+    }) =>
       apiFetch<unknown>(`/leads/${encodeURIComponent(id)}/status`, {
         method: "PUT",
         body: JSON.stringify({ status, comment }),
@@ -442,7 +611,9 @@ export function useAttendanceByGroup(groupId?: Id) {
   return useQuery({
     queryKey: ["attendance", "group", groupId],
     queryFn: async () => {
-      const data = await apiFetch<unknown>(`/attendance/group/${encodeURIComponent(groupId!)}`);
+      const data = await apiFetch<unknown>(
+        `/attendance/group/${encodeURIComponent(groupId!)}`
+      );
       return (Array.isArray(data) ? data : []) as Attendance[];
     },
     enabled: !!groupId,
@@ -451,15 +622,25 @@ export function useAttendanceByGroup(groupId?: Id) {
 
 export function useBulkMarkAttendance() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: (payload: {
       groupId: Id;
       date: string;
-      records: { enrollmentId: Id; status: string; note?: string }[];
+      records: {
+        enrollmentId: Id;
+        status: string;
+        note?: string;
+      }[];
     }) =>
-      apiFetch<unknown>("/attendance/bulk", { method: "POST", body: JSON.stringify(payload) }),
+      apiFetch<unknown>("/attendance/bulk", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: ["attendance", "group", vars.groupId] });
+      qc.invalidateQueries({
+        queryKey: ["attendance", "group", vars.groupId],
+      });
     },
   });
 }
@@ -478,13 +659,29 @@ export function useOverduePayments() {
 
 export function useUpdatePaymentStatus() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: ({
-      id, status, paidDate, paymentMethod, receiptNumber,
-    }: { id: Id; status: string; paidDate?: string; paymentMethod?: string; receiptNumber?: string }) =>
+      id,
+      status,
+      paidDate,
+      paymentMethod,
+      receiptNumber,
+    }: {
+      id: Id;
+      status: string;
+      paidDate?: string;
+      paymentMethod?: string;
+      receiptNumber?: string;
+    }) =>
       apiFetch<unknown>(`/payments/${encodeURIComponent(id)}`, {
         method: "PUT",
-        body: JSON.stringify({ status, paidDate, paymentMethod, receiptNumber }),
+        body: JSON.stringify({
+          status,
+          paidDate,
+          paymentMethod,
+          receiptNumber,
+        }),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["payments"] }),
   });
@@ -506,6 +703,7 @@ export function useReportSummary() {
     queryKey: ["reports", "summary"],
     queryFn: async (): Promise<ReportSummary> => {
       const stats = await apiFetch<DashboardStats>("/dashboard/stats");
+
       return {
         activeGroups: stats.activeStudents,
         attendanceRate: 0,
@@ -530,6 +728,7 @@ export function useSettings() {
 
 export function useUpdateSettings() {
   const qc = useQueryClient();
+
   return useMutation({
     mutationFn: async (payload: Partial<Settings>): Promise<Settings> => ({
       companyName: payload.companyName ?? "Kometa",

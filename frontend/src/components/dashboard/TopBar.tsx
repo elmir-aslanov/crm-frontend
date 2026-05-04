@@ -37,10 +37,10 @@ export function TopBar({
         <div className="flex items-center gap-3 pl-3 border-l border-border">
           <div className="hidden text-right sm:block">
             <p className="text-sm font-semibold text-foreground leading-tight">Elmir Aslanov</p>
-            <p className="text-xs text-muted-foreground">Administrator</p>
+            <p className="text-xs text-muted-foreground">Admin</p>
           </div>
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-primary to-course-purple text-sm font-bold text-primary-foreground">
-            KA
+            EA
           </div>
         </div>
       </div>
