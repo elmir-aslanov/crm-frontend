@@ -1,7 +1,7 @@
 import {
     Home, Users, Shield, Building2, DoorOpen, LayoutGrid,
     GraduationCap, UserCheck, BookOpen, BarChart3, CalendarDays,
-    Settings, Sparkles,
+    Settings, Sparkles, ClipboardList, CreditCard,
   } from "lucide-react";
   import { NavLink } from "@/components/ui/NavLink";
   import {
@@ -23,6 +23,8 @@ import {
   const secondaryItems = [
     { title: "Tələbələr", url: "/telebeler", icon: UserCheck },
     { title: "Kurslar", url: "/kurslar", icon: BookOpen },
+    { title: "Davamiyyət", url: "/davamiyyet", icon: ClipboardList },
+    { title: "Ödənişlər", url: "/odenisler", icon: CreditCard },
     { title: "Hesabatlar", url: "/hesabatlar", icon: BarChart3 },
     { title: "Cədvəl", url: "/cedvel", icon: CalendarDays },
   ];
