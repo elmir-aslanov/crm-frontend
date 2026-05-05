@@ -28,9 +28,7 @@ import {
   useUsers,
   useCategories,
 } from "@/api/resources";
-
-type LeadStatus = "New" | "Contacted" | "Interested" | "Trial" | "Enrolled" | "Lost";
-type AttendanceStatus = "Present" | "Absent" | "Late" | "Excused";
+import type { LeadStatus, AttendanceStatus } from "@/api/resources";
 
 function PageShell({ children }: { children: React.ReactNode }) {
   return (

@@ -538,7 +538,11 @@ export function useOpenGroups(
     queryKey: ["groups", "open", params],
     queryFn: async () => {
       const data = await apiFetch<unknown>("/groups");
-      return normalizeList<Group>(data);
+      const list = normalizeList<Group>(data);
+      return {
+        ...list,
+        items: list.items.filter((g) => g.status === "Open"),
+      };
     },
   });
 }
@@ -702,11 +706,14 @@ export function useReportSummary() {
   return useQuery({
     queryKey: ["reports", "summary"],
     queryFn: async (): Promise<ReportSummary> => {
-      const stats = await apiFetch<DashboardStats>("/dashboard/stats");
+      const [stats, attendance] = await Promise.all([
+        apiFetch<DashboardStats>("/dashboard/stats"),
+        apiFetch<{ total: number; present: number; absent: number; rate: number }>("/reports/attendance").catch(() => null),
+      ]);
 
       return {
         activeGroups: stats.activeStudents,
-        attendanceRate: 0,
+        attendanceRate: attendance?.rate ?? 0,
         monthlyRevenue: stats.collectedPaymentsThisMonth,
         currency: "AZN",
       };
