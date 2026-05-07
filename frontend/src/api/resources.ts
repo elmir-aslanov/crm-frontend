@@ -75,13 +75,11 @@ export type Enrollment = {
   status?: string;
 };
 
-// ✅ FIXED: Runtime array + TypeScript type
 export const LEAD_STATUSES = [
   "New",
   "Contacted",
-  "Interested",
-  "Trial",
-  "Enrolled",
+  "Proposal Sent",
+  "Won",
   "Lost",
 ] as const;
 
@@ -247,83 +245,24 @@ export type AuthResponse = {
     email: string;
     role: string;
     accessToken: string;
+    refreshToken: string;
   };
 };
-
-type AuthLikeData = {
-  _id?: string;
-  firstName?: string;
-  lastName?: string;
-  email?: string;
-  role?: string;
-  accessToken?: string;
-  token?: string;
-  user?: Record<string, unknown>;
-};
-
-function extractAuthData(res: unknown) {
-  const root = (res ?? {}) as Record<string, unknown>;
-  const data = (root.data ?? root) as AuthLikeData;
-
-  const token =
-    (typeof data.accessToken === "string" && data.accessToken) ||
-    (typeof data.token === "string" && data.token) ||
-    (typeof root.accessToken === "string" && root.accessToken) ||
-    (typeof root.token === "string" && root.token) ||
-    "";
-
-  if (!token) {
-    throw new Error("Login cavabinda token tapilmadi");
-  }
-
-  const user =
-    (typeof data.user === "object" && data.user !== null ? data.user : null) ?? {
-      _id: data._id,
-      firstName: data.firstName,
-      lastName: data.lastName,
-      email: data.email,
-      role: data.role,
-    };
-
-  return { token, user };
-}
 
 export function useLogin() {
   const qc = useQueryClient();
 
   return useMutation({
-    mutationFn: async (payload: LoginPayload) => {
-      const attempts: Array<Record<string, string>> = [
-        { email: payload.email, password: payload.password },
-        { username: payload.email, password: payload.password },
-        { identifier: payload.email, password: payload.password },
-        { emailOrUsername: payload.email, password: payload.password },
-      ];
-
-      let lastError: unknown;
-
-      for (const body of attempts) {
-        try {
-          return await apiFetch<AuthResponse>("/auth/login", {
-            method: "POST",
-            body: JSON.stringify(body),
-          });
-        } catch (error) {
-          if (error instanceof ApiError && error.status === 401) {
-            lastError = error;
-            continue;
-          }
-
-          throw error;
-        }
-      }
-
-      throw lastError ?? new Error("Login alinmadi");
-    },
+    mutationFn: (payload: LoginPayload) =>
+      apiFetch<AuthResponse>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        _skipRefresh: true,
+      }),
     onSuccess: (res) => {
-      const { token, user } = extractAuthData(res);
-
-      localStorage.setItem("accessToken", token);
+      const { accessToken, refreshToken, ...user } = res.data;
+      localStorage.setItem("accessToken", accessToken);
+      localStorage.setItem("refreshToken", refreshToken);
       localStorage.setItem("user", JSON.stringify(user));
       qc.invalidateQueries();
     },
@@ -541,7 +480,9 @@ export function useOpenGroups(
       const list = normalizeList<Group>(data);
       return {
         ...list,
-        items: list.items.filter((g) => g.status === "Open"),
+        items: list.items.filter(
+          (g) => g.status === "Forming" || g.status === "Active"
+        ),
       };
     },
   });
@@ -742,5 +683,199 @@ export function useUpdateSettings() {
       supportEmail: payload.supportEmail ?? "support@example.com",
     }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+  });
+}
+
+// ---- PIPELINE ----
+
+export type PipelineStage = {
+  status: LeadStatus;
+  count: number;
+  leads: Pick<Lead, "_id" | "id" | "firstName" | "lastName" | "phone" | "source" | "assignedTo">[];
+  transitions: LeadStatus[];
+};
+
+export function usePipeline() {
+  return useQuery({
+    queryKey: ["leads", "pipeline"],
+    queryFn: () => apiFetch<PipelineStage[]>("/leads/pipeline"),
+  });
+}
+
+export function useUpdateLead() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, ...patch }: Partial<Lead> & { id: Id }) =>
+      apiFetch<unknown>(`/leads/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["leads"] });
+    },
+  });
+}
+
+// ---- INTERACTIONS ----
+
+export type InteractionType = "Call" | "Email" | "Meeting" | "Note";
+export type InteractionDirection = "Inbound" | "Outbound";
+export type InteractionOutcome = "Positive" | "Neutral" | "Negative";
+
+export type Interaction = {
+  _id?: Id;
+  id?: Id;
+  leadId?: Id;
+  type: InteractionType;
+  direction?: InteractionDirection;
+  summary: string;
+  duration?: number;
+  scheduledAt?: string | null;
+  completedAt?: string | null;
+  outcome?: InteractionOutcome;
+  createdBy?: { _id: string; firstName: string; lastName: string; role?: string } | string;
+  createdAt?: string;
+};
+
+export function useInteractions(leadId?: Id) {
+  return useQuery({
+    queryKey: ["interactions", leadId],
+    queryFn: async () => {
+      const data = await apiFetch<unknown>(
+        `/leads/${encodeURIComponent(leadId!)}/interactions`
+      );
+      const list = normalizeList<Interaction>(data);
+      return list.items;
+    },
+    enabled: !!leadId,
+  });
+}
+
+export function useCreateInteraction(leadId?: Id) {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: Omit<Interaction, "_id" | "id" | "leadId" | "createdAt" | "createdBy">) =>
+      apiFetch<Interaction>(`/leads/${encodeURIComponent(leadId!)}/interactions`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["interactions", leadId] });
+    },
+  });
+}
+
+// ---- TASKS ----
+
+export type TaskStatus = "Pending" | "In Progress" | "Completed" | "Overdue" | "Cancelled";
+export type TaskPriority = "Low" | "Medium" | "High";
+
+export type Task = {
+  _id?: Id;
+  id?: Id;
+  title: string;
+  description?: string | null;
+  leadId?: { _id: string; firstName: string; lastName: string; phone?: string } | string | null;
+  assignedTo?: { _id: string; firstName: string; lastName: string; role?: string } | string;
+  createdBy?: { _id: string; firstName: string; lastName: string } | string;
+  dueDate: string;
+  priority?: TaskPriority;
+  status?: TaskStatus;
+  reminderSentAt?: string | null;
+  createdAt?: string;
+};
+
+export type CreateTaskPayload = {
+  title: string;
+  description?: string;
+  leadId?: Id | null;
+  assignedTo: Id;
+  dueDate: string;
+  priority?: TaskPriority;
+};
+
+export function useTasks(params: {
+  status?: string;
+  priority?: string;
+  assignedTo?: Id;
+  leadId?: Id;
+  dueBefore?: string;
+  dueAfter?: string;
+  page?: number;
+} = {}) {
+  return useQuery({
+    queryKey: ["tasks", params],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== "") qs.set(k, String(v));
+      });
+      const data = await apiFetch<unknown>(`/tasks?${qs.toString()}`);
+      return normalizeList<Task>(data);
+    },
+  });
+}
+
+export function useMyTasks() {
+  return useQuery({
+    queryKey: ["tasks", "me"],
+    queryFn: async () => {
+      const data = await apiFetch<unknown>("/tasks/me");
+      return (Array.isArray(data) ? data : []) as Task[];
+    },
+  });
+}
+
+export function useCreateTask() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: CreateTaskPayload) =>
+      apiFetch<Task>("/tasks", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+}
+
+export function useUpdateTask() {
+  const qc = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, ...patch }: Partial<Task> & { id: Id }) =>
+      apiFetch<Task>(`/tasks/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+}
+
+// ---- AUDIT TRAIL ----
+
+export type AuditLogEntry = {
+  _id?: Id;
+  entityType: string;
+  entityId: Id;
+  action: "create" | "update" | "delete";
+  changedBy?: { _id: string; firstName: string; lastName: string; email: string; role?: string } | null;
+  changes: { field: string; oldValue: unknown; newValue: unknown }[];
+  ip?: string;
+  createdAt?: string;
+};
+
+export function useLeadAuditTrail(leadId?: Id) {
+  return useQuery({
+    queryKey: ["leads", leadId, "audit"],
+    queryFn: () =>
+      apiFetch<AuditLogEntry[]>(`/leads/${encodeURIComponent(leadId!)}/audit`),
+    enabled: !!leadId,
   });
 }
